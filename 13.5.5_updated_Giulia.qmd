@@ -1,0 +1,304 @@
+### Investigating the final output with R
+
+We first visualise our metaDMG output manually navigating to the folder `metadmg/` and clicking on "Open folder".
+We can double-click on the tsv file `concatenated_metaDMGfinal.tsv` and visualise it.
+
+We will now investigate the tsv table produced by metaDMG to authenticate damage patterns, visualise the relationship between the damage and the significance, and the degree of damage through depth and time.
+
+R packages for this exercise are located in our original conda environment `authentication`.
+
+We deactivate the current conda environment and we re-activate the environment `authentication`
+
+```bash
+conda deactivate
+conda activate authentication
+```
+
+We navigate to the working directory:
+
+```bash
+cd metadmg/
+```
+
+We load R by running `R` in your terminal
+
+```bash
+R
+```
+
+We load the libraries 
+
+```{r eval=F}
+library(tidyr)
+library(dplyr)
+library(forcats)
+library(scales)
+library(gridExtra)
+library(ggplot2)
+library(purrr)
+library(ggpubr)
+``` 
+
+#### Deamination patterns
+
+We run the damage plot to visualise the deamination patterns along forward and reverse strands, and we save the results per each taxon detected in the samples.
+
+We will use the function `get_dmg_decay_fit` to visualise damage pattern (@fig-authentication-fagusovisdmg).
+The function is saved in `metadmg/script/`, so we only need to run the following command to recall it:
+
+```{r eval=F}
+source("script/get_dmg_decay_fit.R")
+```
+
+But if you are curious and want to know how it works, here is the function itself:
+
+```{r eval=F}
+get_dmg_decay_fit <- function(df, orient = "fwd", pos = 30, p_breaks = c(0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7), y_max = 0.7, y_min = -0.01) {
+  df_dx_fwd <- df %>%
+    select(taxid, name, label, starts_with("fwdx")) %>%
+    select(-starts_with("fwdxConf")) %>% 
+    pivot_longer(names_to = "type", values_to = "Dx_fwd", c(-taxid, -name, -label)) %>%
+    mutate(x = gsub("fwdx", "", type)) %>%
+    select(-type)
+  
+  df_dx_rev <- df %>%
+    select(taxid, name, label, starts_with("bwdx")) %>%
+    select(-starts_with("bwdxConf")) %>%
+    pivot_longer(names_to = "type", values_to = "Dx_rev", c(-taxid, -name, -label)) %>%
+    mutate(x = gsub("bwdx", "", type)) %>%
+    select(-type)
+  
+  df_dx_std_fwd <- df %>%
+    select(taxid, name, label, starts_with("fwdxConf")) %>%
+    pivot_longer(names_to = "type", values_to = "Dx_std_fwd", c(-taxid, -name, -label)) %>%
+    mutate(x = gsub("fwdxConf", "", type)) %>%
+    select(-type)
+  
+  df_dx_std_rev <- df %>%
+    select(taxid, name, label, starts_with("bwdxConf")) %>%
+    pivot_longer(names_to = "type", values_to = "Dx_std_rev", c(-taxid, -name, -label)) %>%
+    mutate(x = gsub("bwdxConf", "", type)) %>%
+    select(-type)
+  
+  df_fit_fwd <- df %>%
+    select(taxid, name, label, starts_with("fwf")) %>%
+    pivot_longer(names_to = "type", values_to = "f_fwd", c(-taxid, -name, -label)) %>%
+    mutate(x = gsub("fwf", "", type)) %>%
+    select(-type)
+  
+  df_fit_rev <- df %>%
+    select(taxid, name, label, starts_with("bwf")) %>%
+    pivot_longer(names_to = "type", values_to = "f_rev", c(-taxid, -name, -label)) %>%
+    mutate(x = gsub("bwf", "", type)) %>%
+    select(-type)
+  
+  dat <- df_dx_fwd %>%
+    inner_join(df_dx_rev, by = c("taxid", "name", "label", "x")) %>%
+    inner_join(df_dx_std_fwd, by = c("taxid", "name", "label", "x")) %>%
+    inner_join(df_dx_std_rev, by = c("taxid", "name", "label", "x")) %>%
+    inner_join(df_fit_fwd, by = c("taxid", "name", "label", "x")) %>%
+    inner_join(df_fit_rev, by = c("taxid", "name", "label", "x")) %>%
+    mutate(x = as.numeric(x)) %>%
+    filter(x <= pos) %>%
+    rowwise() %>%
+    mutate(Dx_fwd_min = Dx_fwd - Dx_std_fwd,
+           Dx_fwd_max = Dx_fwd + Dx_std_fwd,
+           Dx_rev_min = Dx_rev - Dx_std_rev,
+           Dx_rev_max = Dx_rev + Dx_std_rev)
+  
+  fwd_max <- dat %>%
+    group_by(as.character(x)) %>%
+    summarise(val = mean(Dx_std_fwd) + sd(Dx_std_fwd)) %>%
+    pull(val) %>%
+    max()
+  
+  fwd_min <- dat %>%
+    group_by(as.character(x)) %>%
+    summarise(val = mean(Dx_std_fwd) - sd(Dx_std_fwd)) %>%
+    pull(val) %>%
+    min()
+  
+  rev_max <- dat %>%
+    group_by(as.character(x)) %>%
+    summarise(val = mean(Dx_std_rev) + sd(Dx_std_rev)) %>%
+    pull(val) %>%
+    max()
+  
+  rev_min <- dat %>%
+    group_by(as.character(x)) %>%
+    summarise(val = mean(Dx_std_rev) - sd(Dx_std_rev)) %>%
+    pull(val) %>%
+    min()
+  
+  if (orient == "fwd") {
+    ggplot() +
+      geom_ribbon(data = dat, aes(x, ymin = Dx_fwd_min, ymax = Dx_fwd_max, group = interaction(name, taxid)), alpha = 0.6, fill = "darkcyan") +
+      geom_line(data = dat, aes(x, Dx_fwd, group = interaction(name, taxid)), color = "black") +
+      geom_point(data = dat, aes(x, f_fwd), alpha = .50, size = 2, fill = "black") +
+      theme_test() +
+      xlab("Position") +
+      ylab("Frequency") +
+      scale_y_continuous(limits = c(y_min, y_max), breaks = p_breaks) +
+      theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
+      facet_wrap(~label, ncol = 1)
+  } else {
+    ggplot() +
+      geom_ribbon(data = dat, aes(x, ymin = Dx_rev_min, ymax = Dx_rev_max, group = interaction(name, taxid)), alpha = 0.6, fill = "orange") +
+      geom_path(data = dat, aes(x, Dx_rev, group = interaction(name, taxid)), color = "black") +
+      geom_point(data = dat, aes(x, f_rev), alpha = .50, size = 2, fill = "black") +
+      theme_test() +
+      xlab("Position") +
+      ylab("Frequency") +
+      scale_x_continuous(trans = "reverse") +
+      scale_y_continuous(limits = c(y_min, y_max), position = "right", breaks = p_breaks) +
+      theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
+      facet_wrap(~label, ncol = 1)
+  }
+}
+```
+
+We load our metaDMG output data (tsv file) and the metadata with information on the age of each sample. We generate the damage plots as seen in @fig-authentication-fagusovisdmg using the function `get-damage`.
+
+```{r eval=F}
+df <- read.csv("concatenated_metaDMGfinal.tsv",  sep = "\t")
+
+#Rename sample column
+colnames(df)[colnames(df) == 'filename'] <- 'sample'
+
+#Modify sample name with short names
+df$sample[df$sample == "VM-11_aggregated_results.stat"] <- "VM-11"
+df$sample[df$sample == "VM-14_aggregated_results.stat"] <- "VM-14"
+df$sample[df$sample == "VM-15_aggregated_results.stat"] <- "VM-15"
+df$sample[df$sample == "VM-17_aggregated_results.stat"] <- "VM-17"
+df$sample[df$sample == "VM-19_aggregated_results.stat"] <- "VM-19"
+df$sample[df$sample == "VM-3_aggregated_results.stat"] <- "VM-3"
+
+#Import the metadata with dates BP
+depth_data <- read.csv ("figures/depth_data.csv", header = TRUE)
+View (depth_data)
+
+#Merge context_data and depth_data with dataframe (adding new column for dates BP)
+df$new <- depth_data$Date_BP[match(df$sample, depth_data$Sample_ID)]
+names(df)[names(df) == 'new'] <- 'Date_BP'
+
+# Convert Date_BP columns to factors (categorical variable) 
+df$Date_BP <- as.factor(df$Date_BP)
+
+#Setting filtering theshold for ancient reads
+minDMG = 0.02 # filter criteria, plot only taxa above set value
+zfit = 2 # minimum significance, the higher the better, 2 would mean that we estimante the damage with 95% confidence. 
+MinLength = 35 # minimum mean readlength, while we set a hard filter initially while trimming, we would like the mean readlength to be 35 or higher. 
+reads = 200 # number of reads required depends on the amount of damage and the significance
+
+#Subsetting only animals and plants, at the genus level, number of reads > 200.
+dt1 <- df %>% filter(A > minDMG, nreads >= reads, mean_rlen >= MinLength, Zfit  > zfit, grepl("\\bgenus\\b", rank), !grepl("Bacteria",taxa_path))
+
+#deamination plot with facet wrap per each taxon in a sample
+tax_g_list <- unique(dt1$name)
+nrank <- "rank" # Replace with the actual rank column name
+
+X <- tax_g_list 
+purrr::map(tax_g_list, function(X, nrank) {
+  sel_tax <- dt1 %>%
+    rename(label = sample) %>%
+    filter(name == X) %>%
+    filter(rank == rank) %>%
+    select(name, label) %>%
+    distinct() %>%
+    arrange(name)
+  if (nrow(sel_tax) > 0) {
+    n_readsa <- dt1 %>%
+      inner_join(sel_tax) %>%
+      filter(rank == rank) %>%
+      pull(nreads) %>%
+      sum()
+    ggpubr::ggarrange(plotlist = list(
+      get_dmg_decay_fit(df = dt1 %>% rename(label = sample) %>% inner_join(sel_tax) %>% filter(rank == rank), orient = "fwd", y_max = 0.70) +
+        ggtitle(paste0(X, " nreads=", n_readsa, " Forward")),
+      get_dmg_decay_fit(df = dt1 %>% rename(label = sample)  %>% inner_join(sel_tax) %>% filter(rank == rank), orient = "rev", y_max = 0.70) +
+        ggtitle(paste0(X, " nreads=", n_readsa, " Reverse"))
+    ), align = "hv")
+    ggsave(paste0("figures/", X, "-dmg.pdf"), plot = last_plot(), width = 8, height = 4)
+  }
+})
+``` 
+![Deamination patterns for sheep (*Ovis*) and beech (*Fagus*) reads.](assets/images/chapters/authentication/Fagus_Ovis-dmg.png){#fig-authentication-fagusovisdmg}
+
+### Amplitude of damage vs Significance
+
+We provide an R script to investigate the main statistics. 
+
+Here we visualise the amplitude of damage (A) and its significance (Zfit), for the full dataset but filtering it to a minimum of 100 reads and at the genus level (@fig-authentication-fig8). 
+
+```{r eval=F}
+#Subset dataset animal and plants at the genus level
+dt2 <- df %>% filter(nreads > 100, grepl("\\bgenus\\b", rank), grepl("Metazoa", taxa_path) | grepl("Viridiplant", taxa_path))
+
+#Adding factor column for Kingdom
+dt2 <- dt2 %>% 
+  mutate(Kingdom =   # creating our new column
+           case_when(grepl("Viridiplant", taxa_path) ~ "Viridiplantae",
+                     grepl("Metazoa",taxa_path) ~ "Metazoa"))
+
+#Plotting  amplitude of damage vs its significance and saving as pdf file
+pdf(file = "figures/p1.pdf", width = 8, height = 6)
+ggplot(dt2, aes(y=A, x=Zfit)) + 
+  geom_point(aes(size=nreads, col=Kingdom)) +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust =1)) +
+  scale_color_manual(values = c("#8B1A1A", "#458B00"))+
+  scale_size_continuous(labels = function(x) format(x, scientific = FALSE)) +
+  xlab("significance") + ylab("damage") + theme_minimal()
+dev.off()
+``` 
+
+![Amplitude of damage (A) vs significance (Zfit) for animals and plants.](assets/images/chapters/authentication/p2.png){#fig-authentication-fig8}
+
+### Amplitude of damage and mean fragment length through time
+
+Here we visualise the amplitude of damage (A) and the mean length of the fragments (mean_rlen) by date (BP) for the filtered dataset with a minimum of 100 reads and at the genus level (@fig-authentication-fig9).
+
+```{r eval=F}
+#Plotting damage (A) by period (dates BP)
+p2a<- dt2 %>%
+  mutate(Date_BP = fct_relevel(Date_BP,
+                             "6100","5300","4100","3900","3000", "800")) %>%
+  ggplot(aes(x=A, y=Date_BP))+ 
+  geom_boxplot(aes(x=A, y=Date_BP, fill = sample))+
+  geom_point(aes(fill = sample), size = 3, shape = 21, color = "black", stroke = .5) +
+  scale_x_continuous(limits = c(0, 0.20), breaks = seq(0, 0.20, by = 0.05)) +
+  theme_minimal() + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+p2a
+
+#Plotting mean length (mean_rlen) by period (dates BP)
+p2b<- dt2 %>%
+  mutate(Date_BP = fct_relevel(Date_BP,
+                             "6100","5300","4100","3900","3000", "800")) %>%
+  ggplot(aes(x=mean_rlen, y=Date_BP))+ 
+  geom_boxplot(aes(x=mean_rlen, y=Date_BP, fill = sample)) +
+  geom_point(aes(fill = sample), size = 3, shape = 21, color = "black", stroke = .5) +
+  scale_x_continuous(limits = c(30, 80), breaks = seq(30, 80, by = 10)) +
+  theme_minimal() + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+p2b
+
+#Combining the plots and saving as pdf file
+pdf(file = "figures/p2.pdf", width = 8, height = 6)
+p2 <- grid.arrange(p2a, p2b,
+                   ncol = 2, nrow = 1)
+dev.off()
+``` 
+
+![Amplitude of damage (A) and mean fragment length (mean_rlen) through time.](assets/images/chapters/authentication/p3.png){#fig-authentication-fig9}
+
+::: {.callout-tip}
+Once finished examining the plots you can quit R
+```bash
+## Press 'n' when asked if you want to save your workspace image.
+quit()
+```
+:::
+
+::: {.callout-tip}
+You can manually navigate to the folder `metadmg/figures/`
+And click "Open folder"
+You can double-click on the pdf files to visualise them.
+:::
